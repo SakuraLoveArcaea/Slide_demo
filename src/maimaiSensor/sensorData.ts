@@ -5,6 +5,22 @@ export type SensorKey =
     | 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8'
     | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6' | 'E7' | 'E8';
 
+export function getSensorKeys(): SensorKey[] {
+    const groups = ['A', 'B', 'C', 'D', 'E'];
+    const maxNumbers = [8, 8, 2, 8, 8];
+    const keys: SensorKey[] = [];
+
+    for (let i = 0; i < groups.length; i++) {
+        const group = groups[i];
+        const maxNum = maxNumbers[i]!;
+        for (let j = 1; j <= maxNum; j++) {
+            keys.push(`${group}${j}` as SensorKey);
+        }
+    }
+    return keys;
+}
+
+
 export interface SensorPath {
     id: SensorKey;
     d: string;

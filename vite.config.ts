@@ -8,4 +8,5 @@ export default defineConfig({
       vue(),
       svgLoader() // 支持svg
   ],
+    base: '/Slide_demo/',
 })

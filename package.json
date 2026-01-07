@@ -7,7 +7,10 @@
     "dev_host": "vite --host",
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist",
+    "slideQueue": "tsx src/maimaiSensor/slide/slideQueue.ts"
   },
   "dependencies": {
     "vue": "^3.5.24"
@@ -16,10 +19,13 @@
     "@types/node": "^24.10.1",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.8.1",
+    "gh-pages": "^6.3.0",
     "typescript": "~5.9.3",
     "vite": "^6.0.1",
     "vite-svg-loader": "^5.1.0",
-    "vue-tsc": "^3.1.4"
+    "vue-tsc": "^3.2.2",
+    "tsx": "^4.21.0"
   },
-  "overrides": {}
+  "overrides": {},
+  "homepage": "https://SakuraLoveArcaea.github.io/Slide_demo"
 }
