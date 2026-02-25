@@ -9,7 +9,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     (e: "update:touched", ids: Set<SensorKey>): void;
-    // 這裡改名，強調這是我們自己模擬的點擊，不是原生的
     (e: "sensor-tap", id: SensorKey): void;
 }>();
 
@@ -20,25 +19,19 @@ const emitTouchUpdate = () => {
     emit("update:touched", new Set(activePointers.values()));
 };
 
-// ==========================================
-// 核心修改：Pointer Down (按下瞬間)
-// ==========================================
+
 const onPointerDown = (e: PointerEvent) => {
-    // 1. 為了防止滑鼠右鍵等奇怪觸發
     if (e.pointerType === 'mouse' && e.buttons !== 1) return;
 
     const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement;
     const sensorId = target?.classList.contains("sensor") ? target.id as SensorKey : null;
 
     if (sensorId) {
-        // A. 處理多點觸控邏輯 (原本的 Slide)
         activePointers.set(e.pointerId, sensorId);
         if (navigator.vibrate) navigator.vibrate(5);
         emitTouchUpdate();
 
-        // B. 【新增】處理點擊邏輯 (Tap)
-        // 我們在「按下去」的這一刻，直接視為「點擊」
-        // 這比原生的 click 更快，而且完全受控
+
         emit("sensor-tap", sensorId);
     }
 
@@ -101,9 +94,9 @@ onBeforeUnmount(() => activePointers.clear());
                     :transform="s.transform"
                     class="sensor"
                     :class="{
-            active: props.activeIds.has(s.id),
-            disabled: isDisabled(s.id),
-          }"
+                                active: props.activeIds.has(s.id),
+                                disabled: isDisabled(s.id),
+                            }"
                 />
             </g>
         </svg>

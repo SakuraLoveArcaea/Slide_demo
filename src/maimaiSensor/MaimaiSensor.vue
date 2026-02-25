@@ -1,19 +1,26 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
 import { type SensorKey } from "./sensorData.ts";
 import SensorRing from "./SensorRing.vue";
-import { slide_game_task } from "./slide.ts"
-import { type GameTask } from "./slide.ts"
+import { slide_game_task } from "./slide.ts";
+import { type GameTask } from "./slide.ts";
 
-// ==========================================
-// 1. 定義資料結構
-// ==========================================
+// 動態取得所有可用的 slide code，供下拉選單使用
+const availableSlideCodes = Object.keys(slide_game_task);
 
+// 預設值設定為 "1>5"
+const DEFAULT_SLIDE_CODE = "1>5";
 
-// ==========================================
-// 2. 固定任務清單
-// ==========================================
-const tasks = reactive<GameTask[]>(slide_game_task["1>5"]!);
+// 確保初始化的值存在，否則退回預設值
+const initialCode = availableSlideCodes.includes(DEFAULT_SLIDE_CODE)
+    ? DEFAULT_SLIDE_CODE
+    : availableSlideCodes[0] || "";
+
+const selectSlideCode = ref(initialCode);
+
+// 確保 tasks 初始化時也有防呆
+const initialTasks = slide_game_task[selectSlideCode.value] || slide_game_task[DEFAULT_SLIDE_CODE] || [];
+const tasks = reactive<GameTask[]>([...initialTasks]);
 
 const isGameClear = ref(false);
 const JUDGE_WINDOW_SIZE = 3;
@@ -21,16 +28,15 @@ const JUDGE_WINDOW_SIZE = 3;
 // 自動重置的計時器 ID
 let autoResetTimer: number | undefined;
 
-// ==========================================
-// 3. Sensor 狀態與模式控制
-// ==========================================
 const isLockMode = ref(false);
 const isDeEnabled = ref(true);
 const touchedIds = ref(new Set<SensorKey>());
 const lockedIds = reactive(new Set<SensorKey>());
 const finalActiveIds = computed(() => isLockMode.value ? lockedIds : touchedIds.value);
 
+// 更新touchedIds（或activedIds）
 const handleTouchUpdate = (ids: Set<SensorKey>) => { if (!isLockMode.value) touchedIds.value = ids; };
+
 const handleSensorClick = (id: SensorKey) => {
     if (isLockMode.value) lockedIds.has(id) ? lockedIds.delete(id) : lockedIds.add(id);
 };
@@ -73,7 +79,7 @@ const gameLoop = () => {
 
 const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[]) => {
     if (isGameClear.value) return;
-    const pendingTasks = tasks.filter(t => !t.done);
+    const pendingTasks: GameTask[] = tasks.filter(t => !t.done);
 
     if (pendingTasks.length === 0) {
         if (!isGameClear.value) {
@@ -90,12 +96,18 @@ const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[])
     const tasksToCheck = pendingTasks.slice(0, JUDGE_WINDOW_SIZE);
 
     for (let i = 0; i < tasksToCheck.length; i++) {
-        const task = tasksToCheck[i];
+        const task = tasksToCheck[i]!;
         let isMatch = false;
+
+        // 將 key 統一轉成陣列格式，方便後續比對
+        const targetKeys = Array.isArray(task.key) ? task.key : [task.key];
+
         if (task.type === "Active") {
-            if (activeSet.has(task.key)) isMatch = true;
+            // OR 邏輯：只要 activeSet 包含 targetKeys 裡的「任何一個」就算符合
+            if (targetKeys.some(k => activeSet.has(k))) isMatch = true;
         } else if (task.type === "Released") {
-            if (releasedList.includes(task.key)) isMatch = true;
+            // OR 邏輯：只要 releasedList 包含 targetKeys 裡的「任何一個」就算符合
+            if (targetKeys.some(k => releasedList.includes(k))) isMatch = true;
         }
 
         if (isMatch) {
@@ -103,9 +115,10 @@ const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[])
             task.autoCompleted = false;
             if (navigator.vibrate) navigator.vibrate(20);
 
+            // 把被跳過的任務標記為自動完成
             for (let j = 0; j < i; j++) {
-                tasksToCheck[j].done = true;
-                tasksToCheck[j].autoCompleted = true;
+                tasksToCheck[j]!.done = true;
+                tasksToCheck[j]!.autoCompleted = true;
             }
             return;
         }
@@ -120,10 +133,31 @@ const isCurrent = (task: GameTask) => {
     const firstPending = tasks.find(t => !t.done);
     return firstPending && task.id === firstPending.id;
 };
+
+// 監聽 selectSlideCode 改變
+watch(selectSlideCode, (newCode) => {
+    // 防呆：如果找不到對應的 code，退回預設值
+    const newTasks = slide_game_task[newCode] || slide_game_task[DEFAULT_SLIDE_CODE] || [];
+
+    // 使用 splice 更新陣列，保留響應性
+    // 注意：因為 slide_game_task 裡的物件是被共用的，我們需要深拷貝（至少複製一層），
+    // 以免多次切換後，上一次玩過的 done 狀態殘留在原物件上。
+    const clonedTasks = newTasks.map(t => ({ ...t, done: false, autoCompleted: false }));
+    tasks.splice(0, tasks.length, ...clonedTasks);
+
+    resetGame();
+});
+
+const formatKey = (key: SensorKey | SensorKey[]) => {
+    return Array.isArray(key) ? key.join('/') : key;
+};
+
 </script>
+
 
 <template>
     <div class="app-container">
+
 
         <div class="status-board ui-layer pointer-auto">
             <div
@@ -131,17 +165,16 @@ const isCurrent = (task: GameTask) => {
                 :key="task.id"
                 class="status-chip"
                 :class="{
-                    'chip-active': task.type === 'Active',
-                    'chip-released': task.type === 'Released',
-                    'is-done': task.done,
-                    'is-current': isCurrent(task),
-                    'is-auto': task.autoCompleted
-                }"
+            'chip-active': task.type === 'Active',
+            'chip-released': task.type === 'Released',
+            'is-done': task.done,
+            'is-current': isCurrent(task),
+            'is-auto': task.autoCompleted
+        }"
             >
-                {{ task.key }}{{ task.type === 'Active' ? '↓' : '↑' }}
+                {{ formatKey(task.key) }}{{ task.type === 'Active' ? '↓' : '↑' }}
             </div>
         </div>
-
         <div v-if="isGameClear" class="center-msg ui-layer pointer-events-none">
             FINISHED!
             <div class="sub-msg">Restarting in 1s...</div>
@@ -156,17 +189,28 @@ const isCurrent = (task: GameTask) => {
         />
 
         <div class="bottom-controls ui-layer">
-            <button @click="toggleLockMode" class="btn-tiny pointer-auto" :class="{active: isLockMode}">
-                {{ isLockMode ? 'LOCK' : 'TOUCH' }}
-            </button>
+            <div class="control-group left">
+                <button @click="toggleLockMode" class="btn-tiny pointer-auto" :class="{active: isLockMode}">
+                    {{ isLockMode ? 'LOCK' : 'TOUCH' }}
+                </button>
+                <button @click="toggleDe" class="btn-tiny pointer-auto" :class="{active: !isDeEnabled}">
+                    {{ isDeEnabled ? 'DE:ON' : 'DE:OFF' }}
+                </button>
+            </div>
 
-            <button @click="resetGame" class="btn-large pointer-auto">
-                RESET
-            </button>
+            <div class="control-group center">
+                <button @click="resetGame" class="btn-large pointer-auto">
+                    RESET
+                </button>
+            </div>
 
-            <button @click="toggleDe" class="btn-tiny pointer-auto" :class="{active: !isDeEnabled}">
-                {{ isDeEnabled ? 'DE:ON' : 'DE:OFF' }}
-            </button>
+            <div class="control-group right">
+                <select class="btn-select pointer-auto" v-model="selectSlideCode">
+                    <option v-for="code in availableSlideCodes" :key="code" :value="code">
+                        {{ code }}
+                    </option>
+                </select>
+            </div>
         </div>
     </div>
 </template>
@@ -212,27 +256,46 @@ const isCurrent = (task: GameTask) => {
     display: block; margin: 10px auto 0; font-size: 12px;
     background: #333; color: white; border: 1px solid #555; padding: 4px 10px; border-radius: 4px;
 }
+
+/* 底部控制列重新佈局 */
 .bottom-controls {
     bottom: 10px; width: 100%;
-    display: flex; justify-content: space-between;
-    align-items: center; /* 讓不同大小的按鈕垂直置中 */
-    padding: 0 10px; box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 15px;
+    box-sizing: border-box;
 }
+
+.control-group {
+    display: flex;
+    gap: 8px; /* 群組內按鈕的間距 */
+    align-items: center;
+}
+
+.control-group.left { justify-content: flex-start; flex: 1; }
+.control-group.center { justify-content: center; flex: 1; }
+.control-group.right { justify-content: flex-end; flex: 1; }
+
 .btn-tiny {
-    background: #333; color: #888; border: 1px solid #444; font-size: 10px; padding: 4px 8px; border-radius: 4px;
+    background: #333; color: #888; border: 1px solid #444; font-size: 11px; padding: 6px 10px; border-radius: 4px; cursor: pointer;
 }
 .btn-tiny.active { background: #444; color: #fff; border-color: #888; }
 
-/* 新增的大按鈕樣式 */
+.btn-select {
+    background: #333; color: #fff; border: 1px solid #555; font-size: 12px; padding: 6px 8px; border-radius: 4px; cursor: pointer; outline: none;
+}
+
 .btn-large {
-    background: #991b1b; /* 深紅色 */
+    background: #991b1b;
     color: #fff;
     border: 1px solid #f87171;
     font-size: 14px;
     font-weight: bold;
-    padding: 8px 20px;
+    padding: 8px 24px;
     border-radius: 6px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    cursor: pointer;
 }
 .btn-large:active {
     background: #7f1d1d;
