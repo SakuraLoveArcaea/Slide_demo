@@ -141,6 +141,8 @@ svg {
     transition: fill 0s;
 }
 
+
+
 /* 禁用狀態 (隱形/灰色) */
 .sensor.disabled {
     fill: transparent; /* 或填 #111 看起來像熄滅 */

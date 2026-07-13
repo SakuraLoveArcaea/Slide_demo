@@ -4,6 +4,7 @@ import MaimaiSensor from "./maimaiSensor/MaimaiSensor.vue";
 
 <template>
   <MaimaiSensor></MaimaiSensor>
+
 </template>
 
 <style>

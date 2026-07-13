@@ -34,6 +34,8 @@ const touchedIds = ref(new Set<SensorKey>());
 const lockedIds = reactive(new Set<SensorKey>());
 const finalActiveIds = computed(() => isLockMode.value ? lockedIds : touchedIds.value);
 
+// Canvas 參考
+const slideCanvas = ref<HTMLCanvasElement | null>(null);
 
 // 更新touchedIds（或activedIds）
 const handleTouchUpdate = (ids: Set<SensorKey>) => { if (!isLockMode.value) touchedIds.value = ids; };
@@ -100,14 +102,11 @@ const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[])
         const task = tasksToCheck[i]!;
         let isMatch = false;
 
-        // 將 key 統一轉成陣列格式，方便後續比對
         const targetKeys = Array.isArray(task.key) ? task.key : [task.key];
 
         if (task.type === "Active") {
-            // OR 邏輯：只要 activeSet 包含 targetKeys 裡的「任何一個」就算符合
             if (targetKeys.some(k => activeSet.has(k))) isMatch = true;
         } else if (task.type === "Released") {
-            // OR 邏輯：只要 releasedList 包含 targetKeys 裡的「任何一個」就算符合
             if (targetKeys.some(k => releasedList.includes(k))) isMatch = true;
         }
 
@@ -116,7 +115,6 @@ const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[])
             task.autoCompleted = false;
             if (navigator.vibrate) navigator.vibrate(20);
 
-            // 把被跳過的任務標記為自動完成
             for (let j = 0; j < i; j++) {
                 tasksToCheck[j]!.done = true;
                 tasksToCheck[j]!.autoCompleted = true;
@@ -126,8 +124,130 @@ const checkGameProgress = (activeSet: Set<SensorKey>, releasedList: SensorKey[])
     }
 };
 
-onMounted(() => { animationFrameId = requestAnimationFrame(gameLoop); });
-onUnmounted(() => { cancelAnimationFrame(animationFrameId); clearTimeout(autoResetTimer); });
+// ==========================================
+// 5. Canvas 繪製邏輯
+// ==========================================
+const drawStar = (ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number) => {
+    ctx.save();
+    ctx.beginPath();
+    const spikes = 5;
+    const innerRadius = radius / 2;
+    let rot = (Math.PI / 2) * 3;
+    const step = Math.PI / spikes;
+
+    ctx.moveTo(cx, cy - radius);
+    for (let i = 0; i < spikes; i++) {
+        let x = cx + Math.cos(rot) * radius;
+        let y = cy + Math.sin(rot) * radius;
+        ctx.lineTo(x, y);
+        rot += step;
+
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+    }
+    ctx.lineTo(cx, cy - radius);
+    ctx.closePath();
+
+    // 設定星星顏色 (統一 #00CED1 透明度 50%)
+    ctx.fillStyle = 'rgba(0, 206, 209, 0.5)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0, 206, 209, 0.8)'; // 外框稍微亮一點增加立體感
+    ctx.stroke();
+    ctx.restore();
+};
+
+const drawSlidePath = () => {
+    const canvas = slideCanvas.value;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.parentElement?.getBoundingClientRect();
+    if (!rect) return;
+
+    // 匹配容器大小
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    // 預設 MaiMai 比例：半徑約為短邊的 45%
+    const R = Math.min(canvas.width, canvas.height) * 0.45;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 過濾出需要碰觸的任務來描繪路徑
+    const activeTasks = tasks.filter(t => t.type === 'Active');
+    if (activeTasks.length === 0) return;
+
+    // 將 SensorKey 轉換為 Canvas 座標的輔助函數
+    const getPoint = (keyStr: string) => {
+        if (keyStr === 'C') return { x: cx, y: cy };
+        const type = keyStr.charAt(0);
+        const num = parseInt(keyStr.replace(/[^0-9]/g, '')) || 1;
+
+        // 角度計算：1號位置從 -67.5度 開始
+        let angle = -Math.PI / 2 + Math.PI / 8 + (num - 1) * (Math.PI / 4);
+        if (['D', 'E'].includes(type)) {
+            // D/E 的角度介於按鍵之間 (例如 D1 在正上方 -90度)
+            angle = -Math.PI / 2 + (num - 1) * (Math.PI / 4);
+        }
+
+        // 半徑計算
+        let r = R;
+        if (type === 'B') r = R * 0.465;
+        else if (type === 'E') r = R * 0.66;
+        else if (type === 'D') r = R * 0.9;
+        else if (type === 'A' || !isNaN(Number(type))) r = R;
+
+        return { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
+    };
+
+    // 提取所有節點座標
+    const points = activeTasks.map(task => {
+        const keys = Array.isArray(task.key) ? task.key : [task.key];
+        // 如果是多個 Key，取平均中心點
+        let sumX = 0, sumY = 0;
+        keys.forEach(k => {
+            const p = getPoint(String(k));
+            sumX += p.x; sumY += p.y;
+        });
+        return { x: sumX / keys.length, y: sumY / keys.length };
+    });
+
+    if (points.length < 2) return;
+
+    // 1. 繪製軌跡
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+    }
+
+    ctx.strokeStyle = 'rgba(0, 206, 209, 0.5)'; // #00CED1, 50% opacity
+    ctx.lineWidth = R * 0.12; // 軌跡粗細
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round'; // 讓折角變圓滑，模擬真實弧度
+    ctx.stroke();
+
+    // 2. 在起點繪製星星
+    drawStar(ctx, points[0].x, points[0].y, R * 0.15);
+};
+
+onMounted(() => {
+    animationFrameId = requestAnimationFrame(gameLoop);
+    window.addEventListener('resize', drawSlidePath);
+    // 確保 DOM 渲染完畢後繪製
+    setTimeout(drawSlidePath, 50);
+});
+onUnmounted(() => {
+    cancelAnimationFrame(animationFrameId);
+    clearTimeout(autoResetTimer);
+    window.removeEventListener('resize', drawSlidePath);
+});
 
 const isCurrent = (task: GameTask) => {
     if (task.done) return false;
@@ -137,16 +257,13 @@ const isCurrent = (task: GameTask) => {
 
 // 監聽 selectSlideCode 改變
 watch(selectSlideCode, (newCode) => {
-    // 防呆：如果找不到對應的 code，退回預設值
     const newTasks = slide_game_task[newCode] || slide_game_task[DEFAULT_SLIDE_CODE] || [];
-
-    // 使用 splice 更新陣列，保留響應性
-    // 注意：因為 slide_game_task 裡的物件是被共用的，我們需要深拷貝（至少複製一層），
-    // 以免多次切換後，上一次玩過的 done 狀態殘留在原物件上。
     const clonedTasks = newTasks.map(t => ({ ...t, done: false, autoCompleted: false }));
     tasks.splice(0, tasks.length, ...clonedTasks);
 
     resetGame();
+    // 延遲更新以確保 tasks 已經反映到畫面並重繪
+    setTimeout(drawSlidePath, 0);
 });
 
 const formatKey = (key: SensorKey | SensorKey[]) => {
@@ -155,10 +272,8 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
 
 </script>
 
-
 <template>
     <div class="app-container">
-
 
         <div class="status-board ui-layer pointer-auto">
             <div
@@ -176,6 +291,7 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
                 {{ formatKey(task.key) }}{{ task.type === 'Active' ? '↓' : '↑' }}
             </div>
         </div>
+
         <div v-if="isGameClear" class="center-msg ui-layer pointer-events-none">
             FINISHED!
             <div class="sub-msg">Restarting in 1s...</div>
@@ -188,6 +304,8 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
             @update:touched="handleTouchUpdate"
             @sensor-tap="handleSensorClick"
         />
+
+        <canvas ref="slideCanvas" class="slide-canvas pointer-events-none"></canvas>
 
         <div class="bottom-controls ui-layer">
             <div class="control-group left">
@@ -227,6 +345,16 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
 .pointer-auto { pointer-events: auto; }
 .pointer-events-none { pointer-events: none; }
 
+/* Canvas 層級介於 SensorRing 與 UI(10) 之間 */
+.slide-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5;
+}
+
 .status-board {
     top: 0; left: 0; width: 100%;
     max-height: 25vh; overflow-y: auto;
@@ -258,7 +386,6 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
     background: #333; color: white; border: 1px solid #555; padding: 4px 10px; border-radius: 4px;
 }
 
-/* 底部控制列重新佈局 */
 .bottom-controls {
     bottom: 10px; width: 100%;
     display: flex;
@@ -270,7 +397,7 @@ const formatKey = (key: SensorKey | SensorKey[]) => {
 
 .control-group {
     display: flex;
-    gap: 8px; /* 群組內按鈕的間距 */
+    gap: 8px;
     align-items: center;
 }
 
